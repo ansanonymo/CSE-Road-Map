@@ -493,3 +493,26 @@ details[open] > summary .caret { transform: rotate(90deg); }
 @media (prefers-reduced-motion: reduce) { .tree-svg * { animation: none !important; } }
 @media (max-width: 720px) { .hero { grid-template-columns: minmax(0, 1fr); } .tree-card { max-width: 420px; width: 100%; } }
 @media (max-width: 720px) and (min-width: 421px) { .tree-card { flex-direction: row; align-items: center; max-width: none; } .tree-frame { width: 46%; flex: none; } }
+
+/* ---------- desk ---------- */
+.list.desk { overflow: visible; }
+.desk-course { border-top: 1px solid var(--border); }
+.desk-course:first-child { border-top: 0; }
+.desk-head { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; }
+.desk-head:hover { background: var(--surface-2); }
+.desk-course[open] > .desk-head { background: var(--surface-2); border-bottom: 1px solid var(--border); }
+.desk-course[open] > summary .caret { transform: rotate(90deg); }
+.desk-body { flex: 1; min-width: 0; }
+.desk-title { font-weight: 600; overflow-wrap: anywhere; }
+.desk-title a { color: var(--text); }
+.desk-body .meta { display: flex; gap: 6px 10px; flex-wrap: wrap; align-items: center; margin-top: 3px; font-size: .8rem; color: var(--muted); }
+.desk-body .meta .bar { width: 80px; height: 5px; }
+.desk-chips { margin-top: 6px; }
+.desk-tasks { padding: 2px 0 6px 18px; }
+.desk-tasks:empty { display: none; }
+.badge.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); text-transform: none; }
+@media (max-width: 420px) {
+  .desk-head { padding: 9px 8px; gap: 6px; }
+  .desk-tasks { padding-left: 4px; }
+  .desk-body .meta .bar { width: 56px; }
+}

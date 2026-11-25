@@ -1,32 +1,18 @@
-/* CSE Roadmap: a static, no-build single page app.
- * Three versions (Unified / BUET / Oxford), each with its own progress saved in
- * localStorage under its own key, so switching never loses anything. */
+/* CSE Study Desk: a static, no-build single page app.
+ * One course list (BUET CSE + Oxford CS merged). Progress, notes and the
+ * course selection are saved in localStorage. */
 (function () {
   "use strict";
 
-  /* ------------------------------------------------------------------ */
-  /* Versions                                                            */
-  /* ------------------------------------------------------------------ */
   var VERSIONS = {
-    merged: {
-      name: "Unified CSE Roadmap", short: "Unified",
-      blurb: "BUET CSE and Oxford CS merged: shared courses folded into one, everything else kept.",
-      file: "data/merged.js"
-    },
-    buet: {
-      name: "BUET CS Roadmap", short: "BUET",
-      blurb: "BUET BSc in Computer Science and Engineering, CSE courses only.",
-      file: "data/buet.js"
-    },
-    oxford: {
-      name: "Oxford CS Roadmap", short: "Oxford",
-      blurb: "University of Oxford BA in Computer Science.",
-      file: "data/oxford.js"
+    main: {
+      name: "CSE Study Desk", short: "Desk",
+      blurb: "BUET CSE and Oxford CS courses merged into one study plan.",
+      file: "data/courses.js"
     }
   };
-  var VERSION_ORDER = ["merged", "buet", "oxford"];
-  var SETTINGS_KEY = "cser:settings";
-  var STATE_PREFIX = "cser:v1:";
+  var SETTINGS_KEY = "csedesk:settings";
+  var STATE_PREFIX = "csedesk:v1:";
 
   /* ------------------------------------------------------------------ */
   /* Storage (safe wrapper; falls back to memory if storage is blocked)  */
@@ -45,12 +31,12 @@
     try { return JSON.parse(raw); } catch (e) { return def; }
   }
 
-  var settings = Object.assign({ version: "merged", theme: "light", dailyGoal: 10, sound: true }, readJSON(SETTINGS_KEY, {}));
+  var settings = Object.assign({ version: "main", theme: "light", dailyGoal: 10, sound: true }, readJSON(SETTINGS_KEY, {}));
   if (!(settings.dailyGoal > 0)) settings.dailyGoal = 10;
-  if (!VERSIONS[settings.version]) settings.version = "merged";
+  settings.version = "main";
   function saveSettings() { writeKey(SETTINGS_KEY, JSON.stringify(settings)); }
 
-  function emptyState() { return { removed: [], done: {}, courseNotes: {}, taskNotes: {}, focusDays: {}, focusCourses: {}, badges: [] }; }
+  function emptyState() { return { removed: [], done: {}, courseNotes: {}, taskNotes: {}, focusDays: {}, focusCourses: {}, focusLog: {}, badges: [], defaults: 3 }; }
   function loadState(v) {
     var s = readJSON(STATE_PREFIX + v, null);
     var base = emptyState();
@@ -61,6 +47,8 @@
     base.taskNotes = s.taskNotes && typeof s.taskNotes === "object" ? s.taskNotes : {};
     base.focusDays = s.focusDays && typeof s.focusDays === "object" ? s.focusDays : {};
     base.focusCourses = s.focusCourses && typeof s.focusCourses === "object" ? s.focusCourses : {};
+    base.focusLog = s.focusLog && typeof s.focusLog === "object" ? s.focusLog : {};
+    base.defaults = s.defaults || 1;
     base.treeStage = typeof s.treeStage === "number" ? s.treeStage : null;
     base.badges = Array.isArray(s.badges) ? s.badges : null; // null = never checked (set silently on first load)
     return base;
@@ -106,6 +94,7 @@
       c._leaves = all;
       c._slug = slugify(c.title);
       bySlug[c._slug] = c;
+      if (data.task_based) c.estimated_hours = all.length; // step-based version: every step counts 1
       c._leafHours = all.length ? (c.estimated_hours || 0) / all.length : 0;
     });
     data.courses.forEach(function (c) {
@@ -126,7 +115,12 @@
     });
   }
   function fmtInt(n) { return Math.round(n).toLocaleString("en-US"); }
-  function fmtHours(h) { return h >= 100 ? fmtInt(h) + " h" : (Math.round(h * 10) / 10) + " h"; }
+  function TM() { return !!VERSIONS[settings.version].taskMode; }
+  function fmtHours(h) {
+    if (TM()) return fmtInt(h) + (Math.round(h) === 1 ? " step" : " steps");
+    return h >= 100 ? fmtInt(h) + " h" : (Math.round(h * 10) / 10) + " h";
+  }
+  function approx(h) { return (TM() ? "" : "~") + fmtHours(h); }
   function pct(a, b) { return b ? Math.round((a / b) * 100) : 0; }
   function pad(n) { return (n < 10 ? "0" : "") + n; }
   function dayKey(ts) { var d = new Date(ts); return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); }
@@ -178,6 +172,15 @@
       var bucket = c.optional ? s.opt : s.core; bucket.h += p.hours; bucket.d += p.hoursDone;
     });
     return s;
+  }
+  function selFocusDays() { // focus minutes per day, selected courses only
+    var out = {};
+    Object.keys(S.focusLog || {}).forEach(function (k) {
+      var day = S.focusLog[k], n = 0;
+      Object.keys(day).forEach(function (code) { if (isSelected(code)) n += day[code]; });
+      if (n) out[k] = n;
+    });
+    return out;
   }
   function activityByDay() {
     var byDay = {};
@@ -255,25 +258,22 @@
       case "cse": return { group: "Subject", text: "A computer science course (taught by the CS/CSE department).", why: "Non-CS courses (physics, chemistry, humanities, electrical engineering) were removed, so this tag marks what is left as real CS." };
       case "cse-related-math": return { group: "Subject", text: "A maths course kept because CS needs it (for example linear algebra, probability, calculus, optimisation, game theory).", why: "Maths from the maths department was kept only when later CS courses depend on it; this tag says why it is on a CS roadmap." };
       case "theory": return { group: "Kind", text: "A lecture course: concepts, proofs and problem solving.", why: "Lets you tell lecture courses from lab courses; BUET marks odd-numbered courses as theory." };
-      case "practical": return { group: "Kind", text: "A lab or practical course (BUET 'sessional'), or a course with hands-on practicals.", why: "A practical comes right after its theory course in the roadmap so you do them side by side. Renamed from 'sessional' so both universities use the same word." };
+      case "practical": return { group: "Kind", text: "A lab or practical course (BUET 'sessional'), or a course with hands-on practicals.", why: "A practical comes right after its theory course in the study order so you do them side by side. Renamed from 'sessional' so both universities use the same word." };
       case "project": return { group: "Kind", text: "A project or thesis course.", why: "Projects take a different kind of work (planning, building, writing up), so they are marked." };
-      case "optional": return { group: "Status", text: "An elective. Pick the ones you want; the rest of the roadmap is core.", why: "Oxford marks its own options. BUET does not, so for BUET this is a guess: Levels 1-3 are core and most Level 4 courses are optional. In the unified roadmap a course is optional only if every source course is optional." };
+      case "optional": return { group: "Status", text: "An elective. Pick the ones you want; the rest are core.", why: "Oxford marks its own options. BUET does not, so for BUET this is a guess: its advanced specialist courses are treated as optional. For a merged course, it is optional only if every source course is optional." };
       case "compulsory": return { group: "Status", text: "A course Oxford requires (Preliminary Examinations and Part A core).", why: "Kept from Oxford's own marking so you can see what the degree requires." };
-      case "likely-service-course": return { group: "Status", text: "A BUET course that looks like a version taught to other departments.", why: "These were left out of the roadmaps so the same subject does not appear twice." };
-      case "oxfordpreliminary-examination": return { group: "When", text: "Oxford first year: Preliminary Examinations.", why: "Shows when Oxford teaches the course (spelling kept as first chosen)." };
-      case "oxford-part-a": return { group: "When", text: "Oxford second year: Part A.", why: "Shows when Oxford teaches the course." };
-      case "oxford-part-b": return { group: "When", text: "Oxford third year: Part B.", why: "Shows when Oxford teaches the course. Most Part B options are shared with Part A and listed there." };
-      case "oxfordpart-c": return { group: "When", text: "Oxford fourth year: Part C.", why: "Shows when Oxford teaches the course (spelling kept as first chosen)." };
+      case "likely-service-course": return { group: "Status", text: "A BUET course that looks like a version taught to other departments.", why: "These were left out so the same subject does not appear twice." };
     }
-    if ((m = /^buet-level-(\d)-term-(\d)$/.exec(tag))) {
-      return { group: "When", text: "BUET Level " + m[1] + " Term " + m[2] + " (year " + m[1] + ", term " + m[2] + ").", why: "Shows when BUET teaches the course; the roadmap order follows it where dependencies allow." };
+    if ((m = /^track-(.+)$/.exec(tag))) {
+      var TR = { "core-cse": "Core computer science every CS graduate needs.", "ai-and-ml": "Artificial intelligence and machine learning.", "data-science": "Data science: analysing data and the maths behind it.", "cyber-security": "Cyber security: protecting systems and networks." };
+      return { group: "Track", text: TR[m[1]] || "A study track.", why: "Your default selection is made of these four tracks; this tag says which one the course belongs to. Courses without a track tag are unselected by default." };
     }
     if ((m = /^area-(.+)$/.exec(tag))) {
       return { group: "Area", text: AREA_TEXT[m[1]] || ("Subject area: " + m[1].replace(/-/g, " ") + "."), why: "Area tags group courses by subject across both universities, so you can filter for one field. A course can have more than one." };
     }
     return { group: "Other", text: "Tag from the source data.", why: "" };
   }
-  var TAG_GROUPS = ["Level", "Kind", "Status", "Subject", "When", "Area", "Other"];
+  var TAG_GROUPS = ["Level", "Track", "Kind", "Status", "Subject", "Area", "Other"];
   var LEVEL_ORDER = ["CSE-BASIC", "CSE-INTERMEDIATE", "CSE-ADVANCE"];
   function tagChip(tag, extraClass) {
     var info = tagInfo(tag);
@@ -295,7 +295,7 @@
     open: {},        // details open state, by node id
     noteOpen: {},    // task note editors open, by node id
     courses: { list: "selected", q: "", tags: [] },
-    roadmap: { q: "", hideDone: false }
+    roadmap: { q: "", hideDone: false, track: "" }
   };
 
   /* ------------------------------------------------------------------ */
@@ -308,7 +308,8 @@
       var kv = p.split("="); if (kv[0]) query[decodeURIComponent(kv[0])] = decodeURIComponent((kv[1] || "").replace(/\+/g, " "));
     });
     if (path.indexOf("course/") === 0) return { view: "course", code: decodeURIComponent(path.slice(7)), query: query };
-    var view = ["dashboard", "roadmap", "courses", "tags", "settings"].indexOf(path) >= 0 ? path : "dashboard";
+    if (path === "roadmap") path = "desk";
+    var view = ["dashboard", "desk", "courses", "tags", "settings"].indexOf(path) >= 0 ? path : "dashboard";
     return { view: view, query: query };
   }
   var route = parseHash();
@@ -337,12 +338,12 @@
     hideTip();
     document.querySelectorAll("#nav a").forEach(function (a) {
       var v = a.getAttribute("data-view");
-      a.classList.toggle("active", v === route.view || (route.view === "course" && v === "roadmap"));
+      a.classList.toggle("active", v === route.view || (route.view === "course" && v === "desk"));
     });
-    if (!D) { main.innerHTML = '<p class="loading">Loading roadmap…</p>'; return; }
+    if (!D) { main.innerHTML = '<p class="loading">Loading courses…</p>'; return; }
     var html;
     switch (route.view) {
-      case "roadmap": html = viewRoadmap(); break;
+      case "desk": html = viewDesk(); break;
       case "courses": html = viewCourses(); break;
       case "tags": html = viewTags(); break;
       case "settings": html = viewSettings(); break;
@@ -376,10 +377,10 @@
     var overall = s.hours ? (s.hoursDone / s.hours) * 100 : 0;
 
     var h = '<div class="page-head"><h1>' + esc(VERSIONS[settings.version].name) + '</h1><p>' +
-      esc(VERSIONS[settings.version].blurb) + " Stats count only the " + plural(s.courses, "course") + " on your roadmap.</p></div>";
+      esc(VERSIONS[settings.version].blurb) + " Stats count only the " + plural(s.courses, "course") + " you have selected.</p></div>";
 
     h += '<div class="hero">' + treeCard(s) + todayCard(st) + "</div>";
-    h += '<div class="card overall section" data-tip="Share of estimated study hours done, across selected courses."><div class="bar"><span style="width:' +
+    h += '<div class="card overall section" data-tip="' + (TM() ? "Share of steps done" : "Share of estimated study hours done") + ', across selected courses."><div class="bar"><span style="width:' +
       overall.toFixed(1) + '%"></span></div><span class="pct">' + (overall < 1 && overall > 0 ? "<1" : Math.round(overall)) + "%</span></div>";
 
     function stat(label, value, sub, tip, href) {
@@ -391,12 +392,13 @@
       stat("Courses done", s.complete + '<span class="muted small"> / ' + s.courses + "</span>", pct(s.complete, s.courses) + "% of selected", "A course is done when every step in it is ticked.") +
       stat("In progress", s.inProgress, "started, not finished", "Courses with at least one step done.") +
       stat("Courses left", s.courses - s.complete, plural(s.courses - s.complete - s.inProgress, "not started", "not started"), "Selected courses that are not done yet.") +
-      stat("Hours done", fmtHours(s.hoursDone), "estimated", "Time spent, estimated: each done step counts its share of the course's estimated hours.") +
-      stat("Hours left", fmtHours(hoursLeft), "of " + fmtHours(s.hours) + " total", "Rough estimate of study time still needed for the selected courses.") +
+      (TM() ? stat("Steps left", fmtInt(s.steps - s.stepsDone), "to finish your courses", "Steps not ticked yet in the selected courses.")
+        : stat("Hours done", fmtHours(s.hoursDone), "estimated", "Time spent, estimated: each done step counts its share of the course's estimated hours.") +
+          stat("Hours left", fmtHours(hoursLeft), "of " + fmtHours(s.hours) + " total", "Rough estimate of study time still needed for the selected courses.")) +
       stat("Steps done", fmtInt(s.stepsDone) + '<span class="muted small"> / ' + fmtInt(s.steps) + "</span>", pct(s.stepsDone, s.steps) + "%", "Every tickable step (study, practice, check, project) in the selected courses.") +
-      stat("Focus time", fmtMin(sumObj(S.focusDays)), "logged with the timer", "Real study time you logged with the focus timer (the clock button).") +
+      stat("Focus time", fmtMin(sumObj(selFocusDays())), "logged with the timer", "Real study time you logged with the focus timer (the clock button).") +
       stat("Active days", st.days, st.first ? "since " + fmtDate(new Date(st.first + "T12:00:00")).slice(5) : "no activity yet", "Days on which you ticked at least one step.") +
-      stat("Removed", removed, removed ? "view unselected" : "none removed", "Courses you took off the roadmap. Their progress is kept.", "#/courses?list=unselected") +
+      stat("Not selected", removed, removed ? "view and add" : "all selected", "Courses that are not selected. Their progress is kept.", "#/courses?list=unselected") +
       "</div>";
 
     /* heatmap */
@@ -408,20 +410,20 @@
     LEVEL_ORDER.concat(Object.keys(s.levels).filter(function (k) { return LEVEL_ORDER.indexOf(k) < 0; })).forEach(function (k) {
       var L = s.levels[k]; if (!L) return;
       var p = L.h ? (L.d / L.h) * 100 : 0;
-      lv += '<div class="level-row" data-tip="' + esc(k + ": " + L.c + " of " + L.n + " courses done, " + fmtHours(L.d) + " of " + fmtHours(L.h) + " estimated") + '">' +
+      lv += '<div class="level-row" data-tip="' + esc(k + ": " + L.c + " of " + L.n + " courses done, " + fmtHours(L.d) + " of " + fmtHours(L.h) + (TM() ? "" : " estimated")) + '">' +
         '<a href="' + tagHref(k) + '" class="small">' + esc(k.replace("CSE-", "")) + '</a><div class="bar' + (p >= 100 ? " done" : "") + '"><span style="width:' + p.toFixed(1) + '%"></span></div>' +
         '<span class="num">' + L.c + "/" + L.n + "</span></div>";
     });
     [["Core", s.core, "Courses not tagged optional."], ["Optional", s.opt, "Electives (tagged optional)."]].forEach(function (r) {
       if (!r[1].h) return;
       var p = (r[1].d / r[1].h) * 100;
-      lv += '<div class="level-row" data-tip="' + esc(r[2] + " " + fmtHours(r[1].d) + " of " + fmtHours(r[1].h) + " estimated") + '"><span class="small">' + r[0] +
+      lv += '<div class="level-row" data-tip="' + esc(r[2] + " " + fmtHours(r[1].d) + " of " + fmtHours(r[1].h) + (TM() ? "" : " estimated")) + '"><span class="small">' + r[0] +
         '</span><div class="bar"><span style="width:' + p.toFixed(1) + '%"></span></div><span class="num">' + Math.round(p) + "%</span></div>";
     });
     lv += "</div>";
 
     var nu = nextUp(5);
-    var nx = '<div class="card"><div class="section-head"><h2>Next up</h2><a class="small" href="#/roadmap">Full roadmap</a></div>';
+    var nx = '<div class="card"><div class="section-head"><h2>Next up</h2><a class="small" href="#/desk">Open desk</a></div>';
     if (!nu.length) nx += '<p class="empty">' + (s.courses ? "Everything selected is done. Nice work." : "No courses selected.") + "</p>";
     else nx += '<div class="list">' + nu.map(courseRow).join("") + "</div>";
     nx += '<p class="muted small" style="margin:8px 0 0">First courses in order whose selected prerequisites are done.</p></div>';
@@ -435,7 +437,7 @@
     selectedCourses().forEach(function (c) { c._leaves.forEach(function (id) { if (S.done[id]) recent.push([S.done[id], id, c]); }); });
     recent.sort(function (a, b) { return b[0] - a[0]; });
     h += '<div class="card section"><h2>Recently done</h2>';
-    if (!recent.length) h += '<p class="empty">Nothing ticked yet. Open a course from the roadmap and mark a step done.</p>';
+    if (!recent.length) h += '<p class="empty">Nothing ticked yet. Open a course on your desk and mark a step done.</p>';
     else h += '<ul class="log">' + recent.slice(0, 8).map(function (r) {
       var n = X().nodes[r[1]];
       return '<li><a href="' + courseHref(r[2].code) + '">' + esc(r[2].title) + "</a> · " + esc(pathTitle(r[1])) +
@@ -498,7 +500,7 @@
       var topics = c.tasks.filter(function (t) { return /\.t\d+$/.test(t.id) && !/\.t0$/.test(t.id); }).slice(0, 3).map(function (t) { return t.title; });
       if (topics.length) lines.push("Topics: " + truncate(topics.join("; "), 160));
     }
-    lines.push(statusLabel(p) + " · " + p.done + "/" + p.total + " steps · ~" + fmtHours(p.hours));
+    lines.push(statusLabel(p) + " · " + p.done + "/" + p.total + " steps" + (TM() ? "" : " · ~" + fmtHours(p.hours)));
     if (c.depends_on && c.depends_on.length) lines.push("Needs: " + c.depends_on.map(nameOf).join(", "));
     return lines.join("\n");
   }
@@ -509,12 +511,13 @@
     var side = "";
     if (opts.toggle) {
       side = sel
-        ? '<button class="btn btn-small" type="button" data-action="remove-course" data-code="' + esc(c.code) + '" data-tip="Take this course off your roadmap. Progress is kept.">Remove</button>'
-        : '<button class="btn btn-small btn-primary" type="button" data-action="add-course" data-code="' + esc(c.code) + '" data-tip="Put this course back on your roadmap with its old progress.">Add</button>';
+        ? '<button class="btn btn-small" type="button" data-action="remove-course" data-code="' + esc(c.code) + '" data-tip="Unselect this course. Progress is kept.">Remove</button>'
+        : '<button class="btn btn-small btn-primary" type="button" data-action="add-course" data-code="' + esc(c.code) + '" data-tip="Select this course. Any old progress comes back with it.">Add</button>';
     }
     var meta = '<span class="nowrap">' + esc(c.period_label || "") + "</span>" +
-      '<span class="nowrap" data-tip="Estimated study time (rough guess)">~' + fmtHours(p.hours) + "</span>" +
-      (sel ? "" : '<span class="badge">not on roadmap</span>') +
+      (TM() ? '<span class="nowrap">' + plural(p.total, "step") + "</span>" : '<span class="nowrap" data-tip="Estimated study time (rough guess)">~' + fmtHours(p.hours) + "</span>") +
+      (c.track ? '<span class="nowrap">' + esc(c.track) + "</span>" : "") +
+      (sel ? "" : '<span class="badge">not selected</span>') +
       (c.optional ? '<span class="badge">optional</span>' : "") +
       (c.is_practical ? '<span class="badge">practical</span>' : "") +
       (p.started ? '<span class="bar' + (p.complete ? " done" : "") + '"><span style="width:' + ringP + '%"></span></span><span class="nowrap">' + ringP + "%</span>" : "");
@@ -525,25 +528,34 @@
       (side ? '<div class="side">' + side + "</div>" : "") + "</div>";
   }
 
-  /* ---------------- Roadmap ---------------- */
-  function viewRoadmap() {
-    var h = '<div class="page-head"><h1>Roadmap</h1><p>Your selected courses in study order. A course never comes before one it depends on.</p></div>';
-    h += '<div class="toolbar"><input class="input" type="search" id="roadmapSearch" placeholder="Search by name or tag" value="' + esc(ui.roadmap.q) + '" aria-label="Search roadmap">' +
-      '<div class="seg" role="group" aria-label="Show"><button type="button" data-action="rm-hide" data-val="0" class="' + (ui.roadmap.hideDone ? "" : "on") + '">All</button>' +
-      '<button type="button" data-action="rm-hide" data-val="1" class="' + (ui.roadmap.hideDone ? "on" : "") + '">Hide done</button></div></div>';
-    h += '<div id="roadmapList">' + roadmapList() + "</div>";
+  /* ---------------- Desk: courses in order, each followed by its tasks ---------------- */
+  function defaultRemoved() {
+    var keep = {};
+    (D.default_selected || []).forEach(function (c) { keep[c] = 1; });
+    return new Set(D.courses.filter(function (c) { return !keep[c.code]; }).map(function (c) { return c.code; }));
+  }
+  function unselectedDeps(c) {
+    return (c.depends_on || []).filter(function (d) { return X().byCode[d] && !isSelected(d); });
+  }
+  var TRACKS = ["Core CSE", "AI and ML", "Data science", "Cyber security"];
+  function viewDesk() {
+    var h = '<div class="page-head"><h1>Desk</h1><p>Your selected courses in study order, each followed by its tasks. A course never comes before one it depends on.</p></div>';
+    var anyOpen = selectedCourses().some(function (c) { return ui.open["c:" + c.code]; });
+    h += '<div class="toolbar"><input class="input" type="search" id="roadmapSearch" placeholder="Search by name or tag" value="' + esc(ui.roadmap.q) + '" aria-label="Search the desk">' +
+      '<select class="select" id="trackSelect" aria-label="Track"><option value="">All tracks</option>' +
+      TRACKS.concat(["Other"]).map(function (t) { return '<option value="' + esc(t) + '"' + (ui.roadmap.track === t ? " selected" : "") + ">" + esc(t) + "</option>"; }).join("") + "</select></div>" +
+      '<div class="toolbar"><div class="seg" role="group" aria-label="Show"><button type="button" data-action="rm-hide" data-val="0" class="' + (ui.roadmap.hideDone ? "" : "on") + '">All</button>' +
+      '<button type="button" data-action="rm-hide" data-val="1" class="' + (ui.roadmap.hideDone ? "on" : "") + '">Hide done</button></div>' +
+      '<button type="button" class="btn btn-small" data-action="desk-expand" data-val="' + (anyOpen ? "0" : "1") + '">' + (anyOpen ? "Collapse all" : "Expand all") + "</button></div>";
+    h += '<div id="roadmapList">' + deskList() + "</div>";
     return h;
   }
-  function matchesQuery(c, q) {
-    if (!q) return true;
-    q = q.toLowerCase();
-    return (c.title + " " + c.tags.join(" ") + " " + (c.summary || "") + " " + (c.period_label || "")).toLowerCase().indexOf(q) >= 0;
-  }
-  function roadmapList() {
+  function deskList() {
     var list = selectedCourses().filter(function (c) {
+      if (ui.roadmap.track && (c.track || "Other") !== ui.roadmap.track) return false;
       return matchesQuery(c, ui.roadmap.q) && !(ui.roadmap.hideDone && courseProgress(c).complete);
     });
-    if (!list.length) return '<p class="empty">' + (selectedCourses().length ? "No courses match." : 'Your roadmap is empty. <a href="#/courses?list=unselected">Add courses</a>.') + "</p>";
+    if (!list.length) return '<p class="empty">' + (selectedCourses().length ? "No courses match." : 'Your desk is empty. <a href="#/courses?list=unselected">Select courses</a>.') + "</p>";
     var groups = [];
     list.forEach(function (c) {
       var g = groups[groups.length - 1];
@@ -554,14 +566,37 @@
       var hrs = 0, doneN = 0;
       g.items.forEach(function (c) { var p = courseProgress(c); hrs += p.hours; if (p.complete) doneN++; });
       return '<div class="phase"><div class="phase-head"><h2>' + esc(g.label) + '</h2><span class="muted small">' + doneN + "/" + g.items.length +
-        " done · ~" + fmtHours(hrs) + '</span></div><div class="list">' + g.items.map(function (c) { return courseRow(c); }).join("") + "</div></div>";
+        " done · " + approx(hrs) + '</span></div><div class="list desk">' + g.items.map(deskCourse).join("") + "</div></div>";
     }).join("");
   }
-
+  function deskCourse(c) {
+    var p = courseProgress(c), open = !!ui.open["c:" + c.code], pc = pct(p.done, p.total);
+    var state = p.complete ? "on" : p.done ? "part" : "";
+    var tip = p.complete ? "Course done. Click to mark it not done" : "Mark the whole course done (" + plural(p.total - p.done, "step") + " left)";
+    var missing = unselectedDeps(c);
+    return '<details class="desk-course" data-cblock="' + esc(c.code) + '"' + (open ? " open" : "") + ">" +
+      '<summary class="desk-head"><span class="caret" aria-hidden="true"></span>' +
+      '<button type="button" class="check ' + state + '" data-action="toggle-course" data-code="' + esc(c.code) + '" aria-label="' + esc(tip + ": " + c.title) + '" data-tip="' + esc(tip) + '"></button>' +
+      '<div class="desk-body"><div class="desk-title"><a href="' + courseHref(c.code) + '" data-tip="' + esc(courseTip(c, p)) + '">' + esc(c.title) + "</a></div>" +
+      '<div class="meta"><span class="nowrap" data-tip="Estimated study time (rough guess)">~' + fmtHours(p.hours) + "</span>" +
+      '<span class="nowrap">' + p.done + "/" + p.total + " steps</span>" +
+      '<span class="bar' + (p.complete ? " done" : "") + '"><span style="width:' + pc + '%"></span></span>' +
+      (missing.length ? '<span class="badge warn" data-tip="' + esc("Builds on " + missing.map(nameOf).join(", ") + ", not selected. Fine if you already know it; otherwise select it on the Courses page.") + '">needs unselected course</span>' : "") +
+      '</div><div class="chips desk-chips">' + sortTags(c.tags).map(function (t) { return tagChip(t); }).join("") + "</div></div></summary>" +
+      '<div class="desk-tasks tree">' + (open ? deskTasks(c) : "") + "</div></details>";
+  }
+  function deskTasks(c) {
+    return c.tasks.map(function (t) { return renderNode(t, 0, c); }).join("");
+  }
+  function matchesQuery(c, q) {
+    if (!q) return true;
+    q = q.toLowerCase();
+    return (c.title + " " + c.tags.join(" ") + " " + (c.summary || "") + " " + (c.period_label || "")).toLowerCase().indexOf(q) >= 0;
+  }
   /* ---------------- Courses (selected / unselected) ---------------- */
   function viewCourses() {
     var allTags = sortTags(Object.keys(X().tagCount));
-    var h = '<div class="page-head"><h1>Courses</h1><p>Choose what is on your roadmap. Removing a course keeps its progress and notes; adding it back restores them.</p></div>';
+    var h = '<div class="page-head"><h1>Courses</h1><p>Choose what is on your desk. Removing a course keeps its progress and notes; adding it back restores them.</p></div>';
     var nSel = selectedCourses().length, nUn = D.courses.length - nSel;
     h += '<div class="toolbar"><div class="seg" role="group" aria-label="List">' +
       [["selected", "Selected (" + nSel + ")"], ["unselected", "Unselected (" + nUn + ")"], ["all", "All (" + D.courses.length + ")"]].map(function (o) {
@@ -606,14 +641,17 @@
   function viewCourse(key) {
     var c = findCourse(key);
     var code = c && c.code;
-    if (!c) return '<p class="empty">Course not found in this version. <a href="#/roadmap">Back to roadmap</a></p>';
+    if (!c) return '<p class="empty">Course not found. <a href="#/desk">Back to the desk</a></p>';
     var p = courseProgress(c), sel = isSelected(code);
     if (route.query.step && X().nodes[route.query.step]) {
       for (var pid = X().parentOf[route.query.step]; pid; pid = X().parentOf[pid]) ui.open[pid] = true;
     }
-    var h = '<div class="crumbs"><a href="#/roadmap">← Roadmap</a></div>';
-    if (!sel) h += '<div class="removed-banner"><span>This course is not on your roadmap. Its progress and notes are kept.</span>' +
-      '<button class="btn btn-primary btn-small" type="button" data-action="add-course" data-code="' + esc(code) + '">Add back to roadmap</button></div>';
+    var h = '<div class="crumbs"><a href="#/desk">← Desk</a></div>';
+    if (!sel) h += '<div class="removed-banner"><span>This course is not selected, so it is not on your desk or in your stats. Its progress and notes are kept.</span>' +
+      '<button class="btn btn-primary btn-small" type="button" data-action="add-course" data-code="' + esc(code) + '">Select this course</button></div>';
+    var missing = unselectedDeps(c);
+    if (sel && missing.length) h += '<div class="removed-banner"><span>Builds on ' + missing.map(function (d) { return '<a href="' + courseHref(d) + '">' + esc(nameOf(d)) + "</a>"; }).join(", ") +
+      ", which " + (missing.length > 1 ? "are" : "is") + " not selected. Fine if you already know it; otherwise select it too.</span></div>";
     h += '<div class="course-head"><div class="titles"><div class="muted small">' + esc(c.period_label || "") + " · #" + c.order + " in order</div>" +
       "<h1>" + esc(c.title) + '</h1><div class="chips">' + sortTags(c.tags).map(function (t) { return tagChip(t); }).join("") + "</div></div>" +
       '<div class="btn-row">' +
@@ -621,19 +659,21 @@
         ? '<button class="btn" type="button" data-action="toggle-course" data-code="' + esc(code) + '" data-tip="Clear every step in this course">Mark course not done</button>'
         : '<button class="btn btn-primary" type="button" data-action="toggle-course" data-code="' + esc(code) + '" data-tip="Tick every remaining step in this course">Mark course done</button>') +
       '<button class="btn" type="button" data-action="timer-open" data-code="' + esc(code) + '" data-tip="Start a focus timer for this course">' + ICONS.timer + ' Focus</button>' +
-      (sel ? '<button class="btn btn-danger" type="button" data-action="remove-course" data-code="' + esc(code) + '" data-tip="Take it off the roadmap. Progress is kept.">Remove</button>' : "") +
+      (sel ? '<button class="btn btn-danger" type="button" data-action="remove-course" data-code="' + esc(code) + '" data-tip="Unselect it. Progress is kept.">Remove</button>' : "") +
       "</div></div>";
 
-    h += '<div class="card section"><div class="overall" data-tip="' + esc(p.done + " of " + p.total + " steps · " + fmtHours(p.hoursDone) + " of ~" + fmtHours(p.hours)) + '">' +
+    h += '<div class="card section"><div class="overall" data-tip="' + esc(p.done + " of " + p.total + " steps" + (TM() ? "" : " · " + fmtHours(p.hoursDone) + " of ~" + fmtHours(p.hours))) + '">' +
       '<span class="badge ' + statusOf(p) + '">' + statusLabel(p) + '</span><div class="bar' + (p.complete ? " done" : "") + '"><span style="width:' + pct(p.done, p.total) + '%"></span></div><span class="pct">' + pct(p.done, p.total) + "%</span></div></div>";
 
     /* details + note */
     var deps = (c.depends_on || []).map(function (d) { return depLink(d); }).join(", ") || '<span class="muted">None</span>';
     var needed = (X().neededBy[code] || []).map(function (d) { return depLink(d); }).join(", ") || '<span class="muted">None</span>';
     var kv = '<dl class="kv">' +
-      "<dt>When</dt><dd>" + esc(c.period_label || "—") + "</dd>" +
-      '<dt>Time</dt><dd><span data-tip="Rough guess: about 8 hours per outline topic plus 15 for the final check (and 15 for labs).">~' + fmtHours(c.estimated_hours || 0) + " estimated</span> · " + plural(p.total, "step") + "</dd>" +
+      "<dt>Segment</dt><dd data-tip=\"A stage of the study order, not a time limit\">" + esc(c.period_label || "—") + "</dd>" +
+      (TM() ? "<dt>Size</dt><dd>" + plural(p.total, "step") + "</dd>" + ""
+        : '<dt>Time</dt><dd><span data-tip="Rough guess: about 8 hours per outline topic plus 15 for the final check (and 15 for labs).">~' + fmtHours(c.estimated_hours || 0) + " estimated</span> · " + plural(p.total, "step") + "</dd>") +
       (c.credits ? "<dt>Credits</dt><dd>" + esc(c.credits) + "</dd>" : "") +
+      (c.track ? "<dt>Track</dt><dd>" + esc(c.track) + "</dd>" : "") +
       "<dt>Level</dt><dd>" + esc(c.cse_level || "—") + (c.optional ? " · optional" : " · core") + "</dd>" +
       (S.focusCourses[code] ? '<dt>Focused</dt><dd data-tip="Time logged with the focus timer">' + fmtMin(S.focusCourses[code]) + "</dd>" : "") +
       "<dt>Depends on</dt><dd>" + deps + "</dd>" +
@@ -662,17 +702,18 @@
     var dc = X().byCode[code];
     if (!dc) return esc(code);
     var p = courseProgress(dc);
-    return '<a href="' + courseHref(code) + '" data-tip="' + esc(dc.title + " · " + statusLabel(p) + (isSelected(code) ? "" : " · not on your roadmap")) + '">' + esc(dc.title) + "</a>" +
+    return '<a href="' + courseHref(code) + '" data-tip="' + esc(dc.title + " · " + statusLabel(p) + (isSelected(code) ? "" : " · not selected")) + '">' + esc(dc.title) + "</a>" +
       (p.complete ? " ✓" : "");
   }
   function howMade(c) {
     var v = settings.version, h = "";
-    if (v === "merged") {
+    if (c.track) h += "<p>Selected by default as part of your <b>" + esc(c.track) + "</b> track.</p>";
+    if (c.sources) {
       var srcs = c.sources || [];
       if (srcs.length > 1) h += "<p>Merged from " + plural(srcs.length, "source course") + ". Topics that both cover were folded together; each topic appears once.</p>";
       else if (srcs.length === 1) h += "<p>Taken unchanged from " + esc(srcs[0].university) + " (no matching course at the other university).</p>";
       h += '<ul class="log">' + srcs.map(function (s) {
-        return '<li><span class="from">' + esc(s.university) + "</span> · " + esc(s.title) + ' <span class="muted">(' + esc(s.period_label || "") + ")</span></li>";
+        return '<li><span class="from">' + esc(s.university) + "</span> · " + esc(s.title) + "</li>";
       }).join("") + "</ul>";
       if (c.merge_log && c.merge_log.length) {
         h += '<h3 style="margin-top:12px">Merge log</h3><ul class="log">' + c.merge_log.map(function (m) {
@@ -684,7 +725,7 @@
           return '<li><span class="from">' + esc(m.from) + ":</span> “" + esc(m.topic) + "” → " + what + "</li>";
         }).join("") + "</ul>";
       }
-      h += '<p class="muted small" style="margin-top:10px">Level is the lowest of the sources; optional only if every source is optional; “When” is the earliest year either university teaches it, moved later if a prerequisite comes later. University-specific tags were removed.</p>';
+      h += '<p class="muted small" style="margin-top:10px">Level is the lowest of the sources; optional only if every source is optional; the segment follows where the course sits in the study order, moved later if a prerequisite comes later. University-specific tags were removed.</p>';
     } else {
       var uni = v === "buet" ? "BUET CSE" : "Oxford CS";
       h += "<p>Built from the official " + esc(uni) + " course list" + (c.url ? ' (<a href="' + esc(c.url) + '" target="_blank" rel="noopener">source</a>)' : "") +
@@ -692,7 +733,7 @@
       h += '<ul class="log">' +
         "<li>Each outline topic became a task, split into parts with a <b>Study</b> and a <b>Practice</b> step and a <b>Checkpoint</b>.</li>" +
         "<li>Every course starts with <b>Get ready</b> (tools, a main text, a schedule) and ends with a <b>Final check</b> (mini-project and timed self-exam).</li>" +
-        "<li>Order: dependencies first, then the university's own year and term" + (c.depends_on && c.depends_on.length ? "; this course comes after " + esc(c.depends_on.map(nameOf).join(", ")) : "") + ".</li>" +
+        "<li>Order: dependencies first, then segment and level" + (c.depends_on && c.depends_on.length ? "; this course comes after " + esc(c.depends_on.map(nameOf).join(", ")) : "") + ".</li>" +
         "<li>Hours: a rough guess (about 8 h per topic + 15 h final check), not an official workload.</li>" +
         (c.optional && v === "buet" ? "<li>“optional” is a guess: BUET does not mark electives; most Level 4 courses are treated as optional.</li>" : "") +
         "</ul>";
@@ -713,7 +754,7 @@
       (n.detail ? '<div class="node-detail">' + esc(n.detail) + "</div>" : "") +
       '<div class="node-meta">' + (n.kind && n.kind !== "task" && n.kind !== "subtask" ? '<span class="badge" data-tip="' + esc(KIND_TEXT[n.kind] || n.kind) + '">' + esc(n.kind) + "</span>" : "") +
       (kids ? "<span>" + d + "/" + leaves.length + "</span>" : "") +
-      '<span data-tip="Estimated time for this part">~' + fmtHours(leaves.length * c._leafHours) + "</span>" +
+      (TM() ? "" : '<span data-tip="Estimated time for this part">~' + fmtHours(leaves.length * c._leafHours) + "</span>") +
       (!kids && S.done[n.id] ? '<span class="nowrap">done ' + esc(fmtWhen(S.done[n.id])) + "</span>" : "") + "</div>" +
       (note && !ui.noteOpen[n.id] ? '<div class="node-note-text">' + esc(note) + "</div>" : "") +
       "</div>" +
@@ -732,7 +773,7 @@
   /* ---------------- Tags ---------------- */
   function viewTags() {
     var tags = sortTags(Object.keys(X().tagCount));
-    var h = '<div class="page-head"><h1>About tags</h1><p>What each tag in the ' + esc(VERSIONS[settings.version].name) + " means and why it is there. Click a tag to see its courses.</p></div>";
+    var h = '<div class="page-head"><h1>About tags</h1><p>What each tag in ' + (TM() ? "" : "the ") + esc(VERSIONS[settings.version].name) + " means and why it is there. Click a tag to see its courses.</p></div>";
     TAG_GROUPS.forEach(function (g) {
       var list = tags.filter(function (t) { return tagInfo(t).group === g; });
       if (!list.length) return;
@@ -748,16 +789,7 @@
 
   /* ---------------- Settings ---------------- */
   function viewSettings() {
-    var h = '<div class="page-head"><h1>Settings</h1><p>Each roadmap keeps its own progress, notes and course selection in this browser. Switching never deletes anything.</p></div>';
-    h += '<div class="card"><h2>Roadmap version</h2><div class="versions">' + VERSION_ORDER.map(function (v) {
-      var st = v === settings.version ? S : loadState(v);
-      var doneN = Object.keys(st.done).length, notes = Object.keys(st.courseNotes).length + Object.keys(st.taskNotes).length;
-      return '<button type="button" class="version' + (v === settings.version ? " on" : "") + '" data-action="set-version" data-val="' + v + '">' +
-        '<div class="vname"><span>' + esc(VERSIONS[v].name) + "</span>" + (v === settings.version ? '<span class="badge prog">Active</span>' : v === "merged" ? '<span class="badge">Default</span>' : "") + "</div>" +
-        '<div class="vsub">' + esc(VERSIONS[v].blurb) + "</div>" +
-        '<div class="vsub">' + plural(doneN, "step") + " done · " + plural(notes, "note") + " · " + st.removed.length + " removed</div></button>";
-    }).join("") + "</div></div>";
-
+    var h = '<div class="page-head"><h1>Settings</h1><p>Your progress, notes and course selection are saved in this browser.</p></div>';
     h += '<div class="card"><h2>Theme</h2><div class="seg" role="group" aria-label="Theme">' + [["system", "System"], ["light", "Light"], ["dark", "Dark"]].map(function (o) {
       return '<button type="button" data-action="set-theme" data-val="' + o[0] + '" class="' + (settings.theme === o[0] ? "on" : "") + '">' + o[1] + "</button>";
     }).join("") + "</div></div>";
@@ -770,11 +802,12 @@
       '<div class="setting-row"><div class="txt"><b>Sounds</b><div class="muted small">A soft chime when a timer ends, a course is finished or the daily goal is reached.</div></div>' +
       '<div class="seg" role="group" aria-label="Sounds"><button type="button" data-action="set-sound" data-val="1" class="' + (settings.sound ? "on" : "") + '">On</button>' +
       '<button type="button" data-action="set-sound" data-val="0" class="' + (settings.sound ? "" : "on") + '">Off</button></div></div></div>';
-    h += '<div class="card"><h2>Your data for ' + esc(VERSIONS[settings.version].name) + "</h2>" +
+    h += '<div class="card"><h2>Your data</h2>' +
       (storageOk ? "" : '<p style="color:var(--warn)">This browser is blocking storage, so progress will be lost when you close the page.</p>') +
       '<div class="setting-row"><div class="txt"><b>Export</b><div class="muted small">Download progress, notes and selection as a JSON file (a backup, or to move to another browser).</div></div><button type="button" class="btn" data-action="export">Export</button></div>' +
-      '<div class="setting-row"><div class="txt"><b>Import</b><div class="muted small">Load a file exported from this version. It replaces this version\'s current data.</div></div><label class="btn">Import<input type="file" id="importFile" accept="application/json,.json" hidden></label></div>' +
-      '<div class="setting-row"><div class="txt"><b>Reset</b><div class="muted small">Clear progress, notes and selection for this version only. The other versions are not touched.</div></div><button type="button" class="btn btn-danger" data-action="reset">Reset…</button></div>' +
+      '<div class="setting-row"><div class="txt"><b>Import</b><div class="muted small">Load a file you exported earlier. It replaces your current data.</div></div><label class="btn">Import<input type="file" id="importFile" accept="application/json,.json" hidden></label></div>' +
+      '<div class="setting-row"><div class="txt"><b>Default selection</b><div class="muted small">Select only your ' + (D.default_selected || []).length + ' default lecture courses again (core CSE, AI and ML, data science, cyber security); labs are unselected. Progress is kept.</div></div><button type="button" class="btn" data-action="reset-selection">Restore…</button></div>' +
+      '<div class="setting-row"><div class="txt"><b>Reset</b><div class="muted small">Start over: clear all progress, notes, focus time and badges, and go back to the default selection.</div></div><button type="button" class="btn btn-danger" data-action="reset">Reset…</button></div>' +
       "</div>";
 
     h += '<div class="card"><h2>How to use this roadmap</h2><ul class="log">' + (D.how_to_use || []).map(function (t) { return "<li>" + esc(t) + "</li>"; }).join("") + "</ul>" +
@@ -912,21 +945,15 @@
     setTimeout(checkTree, 1500);
   }
   function exportData() {
-    var payload = { app: "cse-roadmap", version: settings.version, exported_at: new Date().toISOString(), state: S };
+    var payload = { app: "cse-desk", version: settings.version, exported_at: new Date().toISOString(), state: S };
     var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     var a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = "cse-roadmap-" + settings.version + "-" + dayKey(Date.now()) + ".json";
+    a.download = "cse-desk-" + dayKey(Date.now()) + ".json";
     document.body.appendChild(a); a.click();
     setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   }
-  function switchVersion(v) {
-    if (v === settings.version) return;
-    var from = VERSIONS[settings.version].short;
-    settings.version = v; saveSettings();
-    ui.open = {}; ui.noteOpen = {}; ui.courses.tags = []; ui.courses.q = ""; ui.roadmap.q = "";
-    activate().then(function () { toast("Switched to " + VERSIONS[v].name + ". " + from + " progress is kept."); });
-  }
+
 
   document.addEventListener("click", function (e) {
     var el = e.target.closest("[data-action]");
@@ -959,7 +986,7 @@
       case "remove-course":
         setSelected([code], false);
         render();
-        toast(nameOf(code) + " removed from roadmap", function () { setSelected([code], true); render(); });
+        toast(nameOf(code) + " unselected", function () { setSelected([code], true); render(); });
         break;
       case "add-course":
         setSelected([code], true);
@@ -984,7 +1011,14 @@
         ui.courses.tags = ui.courses.tags.filter(function (t) { return t !== el.getAttribute("data-tag"); });
         render(); break;
       case "rm-hide": ui.roadmap.hideDone = val === "1"; render(); break;
-      case "set-version": switchVersion(val); break;
+      case "rm-track": ui.roadmap.track = val; render(); break;
+      case "desk-expand":
+        selectedCourses().forEach(function (c) { if (val === "1") ui.open["c:" + c.code] = true; else delete ui.open["c:" + c.code]; });
+        render(); break;
+      case "reset-selection":
+        confirmBox("Restore the default selection?", "<p>Your " + D.default_selected.length + " default courses (core CSE, AI and ML, data science, cyber security) are selected and every other course, including all labs, is unselected. Progress and notes are kept.</p>", "Restore")
+          .then(function (ok) { if (!ok) return; removedSet = defaultRemoved(); saveState(); render(); toast("Default selection restored"); });
+        break;
       case "set-goal": settings.dailyGoal = +val; saveSettings(); render(); break;
       case "set-sound": settings.sound = val === "1"; saveSettings(); render(); if (settings.sound) chime(false); break;
       case "timer-open": openTimer(code); break;
@@ -997,17 +1031,27 @@
       case "set-theme": settings.theme = val; saveSettings(); applyTheme(); render(); break;
       case "export": exportData(); break;
       case "reset":
-        confirmBox("Reset " + VERSIONS[settings.version].name + "?", "<p>All progress, notes and course selection for this version will be deleted. Other versions are not touched. Export first if you want a backup.</p>", "Reset", true)
+        confirmBox("Reset everything?", "<p>All progress, notes, focus time and badges will be deleted, and the default course selection comes back. Export first if you want a backup.</p>", "Reset", true)
           .then(function (ok) {
             if (!ok) return;
-            S = emptyState(); removedSet = new Set(); saveState(); render(); toast("This version was reset");
+            S = emptyState(); S.badges = []; S.treeStage = 1; removedSet = defaultRemoved(); saveState(); render(); toast("Everything was reset");
           });
         break;
     }
   });
   document.addEventListener("toggle", function (e) {
     var d = e.target;
-    if (d.tagName !== "DETAILS" || !d.hasAttribute("data-node")) return;
+    if (d.tagName !== "DETAILS") return;
+    if (d.hasAttribute("data-cblock")) { // a course on the desk: draw its task list the first time it opens
+      var code = d.getAttribute("data-cblock");
+      if (d.open) {
+        ui.open["c:" + code] = true;
+        var body = d.querySelector(".desk-tasks");
+        if (body && !body.childElementCount) body.innerHTML = deskTasks(X().byCode[code]);
+      } else delete ui.open["c:" + code];
+      return;
+    }
+    if (!d.hasAttribute("data-node")) return;
     var id = d.getAttribute("data-node");
     if (d.open) ui.open[id] = true; else delete ui.open[id];
   }, true);
@@ -1015,7 +1059,7 @@
   var noteTimers = {};
   document.addEventListener("input", function (e) {
     var t = e.target;
-    if (t.id === "roadmapSearch") { ui.roadmap.q = t.value; document.getElementById("roadmapList").innerHTML = roadmapList(); return; }
+    if (t.id === "roadmapSearch") { ui.roadmap.q = t.value; document.getElementById("roadmapList").innerHTML = deskList(); return; }
     if (t.id === "courseSearch") { ui.courses.q = t.value; document.getElementById("courseList").innerHTML = courseList(); return; }
     if (t.id === "courseNote" || t.classList.contains("task-note")) {
       var isCourse = t.id === "courseNote", key = isCourse ? t.getAttribute("data-code") : t.getAttribute("data-id");
@@ -1038,6 +1082,7 @@
   });
   document.addEventListener("change", function (e) {
     var t = e.target;
+    if (t.id === "trackSelect") { ui.roadmap.track = t.value; document.getElementById("roadmapList").innerHTML = deskList(); return; }
     if (t.id === "tagSelect" && t.value) {
       if (ui.courses.tags.indexOf(t.value) < 0) ui.courses.tags.push(t.value);
       render();
@@ -1048,10 +1093,10 @@
       reader.onload = function () {
         var data;
         try { data = JSON.parse(reader.result); } catch (err) { toast("That file is not valid JSON"); return; }
-        if (!data || data.app !== "cse-roadmap" || !data.state) { toast("That is not a CSE Roadmap export"); return; }
-        var other = data.version && data.version !== settings.version;
-        confirmBox("Import into " + VERSIONS[settings.version].name + "?",
-          "<p>This replaces the current progress, notes and selection of this version.</p>" + (other ? '<p style="color:var(--warn)">The file was exported from ' + esc((VERSIONS[data.version] || {}).name || data.version) + ". Steps that do not exist in this version are ignored.</p>" : ""),
+        if (!data || data.app !== "cse-desk" || !data.state) { toast("That is not a CSE Study Desk export"); return; }
+        var other = false;
+        confirmBox("Import this backup?",
+          "<p>This replaces your current progress, notes and course selection.</p>" + (other ? '<p style="color:var(--warn)">The file was exported from ' + esc((VERSIONS[data.version] || {}).name || data.version) + ". Steps that do not exist in this version are ignored.</p>" : ""),
           "Import", true).then(function (ok) {
           if (!ok) return;
           writeKey(STATE_PREFIX + settings.version, JSON.stringify(data.state));
@@ -1092,6 +1137,7 @@
   /* ------------------------------------------------------------------ */
   function activate() {
     var v = settings.version;
+    var fresh = !readKey(STATE_PREFIX + v);
     S = loadState(v); removedSet = new Set(S.removed);
     document.getElementById("brandText").textContent = VERSIONS[v].name;
     D = null; render();
@@ -1100,7 +1146,7 @@
       if (!IDX[v]) IDX[v] = buildIndex(data);
       D = data;
       document.getElementById("footerText").textContent = (D.program || "") + " · data built " + (D.built_on || "") +
-        ". Hours are rough estimates. Progress is saved in this browser only.";
+        (TM() ? ". Progress counts finished steps." : ". Hours are rough estimates.") + " Progress is saved in this browser only.";
       if (route.view === "courses") {
         if (route.query.list) ui.courses.list = route.query.list;
         if (route.query.tag) ui.courses.tags = [route.query.tag];
@@ -1110,11 +1156,13 @@
         saveState();
       }
       if (typeof S.treeStage !== "number") checkTree();
-      if (route.view === "course" && !findCourse(route.code)) { location.hash = "#/roadmap"; return; }
+      // fresh start, or saved with the old defaults (labs or Functional Programming selected): apply the current defaults, keep progress
+      if (fresh || S.defaults < 3) { removedSet = defaultRemoved(); S.defaults = 3; saveState(); }
+      if (route.view === "course" && !findCourse(route.code)) { location.hash = "#/desk"; return; }
       render();
       renderTimer();
     }).catch(function (err) {
-      main.innerHTML = '<p class="empty">Could not load the roadmap data (' + esc(err.message) + ").</p>";
+      main.innerHTML = '<p class="empty">Could not load the course data (' + esc(err.message) + ").</p>";
     });
   }
 
@@ -1180,10 +1228,10 @@
 
   function weeklyCard(byDay) {
     var now = new Date(); now.setHours(12, 0, 0, 0);
-    var days = [], prev = { steps: 0, focus: 0, active: 0 }, cur = { steps: 0, focus: 0, active: 0, finished: 0 };
+    var fd = selFocusDays(), days = [], prev = { steps: 0, focus: 0, active: 0 }, cur = { steps: 0, focus: 0, active: 0, finished: 0 };
     for (var i = 13; i >= 0; i--) {
       var d = new Date(now); d.setDate(d.getDate() - i);
-      var k = dayKey(d), n = byDay[k] || 0, f = S.focusDays[k] || 0, b = i < 7 ? cur : prev;
+      var k = dayKey(d), n = byDay[k] || 0, f = fd[k] || 0, b = i < 7 ? cur : prev;
       b.steps += n; b.focus += f; if (n) b.active++;
       if (i < 7) days.push({ d: d, n: n, f: f });
     }
@@ -1214,7 +1262,7 @@
 
   function badgeList() {
     var s = dashboardStats(), byDay = activityByDay(), st = streaks(byDay);
-    var focusH = sumObj(S.focusDays) / 60;
+    var focusH = sumObj(selFocusDays()) / 60;
     var goalDays = Object.keys(byDay).filter(function (k) { return byDay[k] >= settings.dailyGoal; }).length;
     var notes = Object.keys(S.courseNotes).length + Object.keys(S.taskNotes).length;
     var basics = selectedCourses().filter(function (c) { return c.cse_level === "CSE-BASIC"; });
@@ -1235,11 +1283,11 @@
       b("course-1", "🎓", "First course", "Finish a whole course", s.complete, 1),
       b("course-5", "📚", "Bookworm", "Finish 5 courses", s.complete, 5),
       b("course-20", "🧠", "Big brain", "Finish 20 courses", s.complete, 20),
-      b("basics", "🧱", "Solid foundation", "Finish every CSE-BASIC course on your roadmap", basicsDone, basics.length),
+      b("basics", "🧱", "Solid foundation", "Finish every selected CSE-BASIC course", basicsDone, basics.length),
       b("focus-1", "⏱️", "Focused", "Log 1 hour with the focus timer", Math.floor(focusH * 10) / 10, 1),
       b("focus-25", "🧘", "Deep work", "Log 25 hours with the focus timer", Math.floor(focusH * 10) / 10, 25),
       b("notes-10", "📝", "Note taker", "Write 10 notes", notes, 10),
-      b("finish", "🏆", "Roadmap complete", "Finish every course on your roadmap", s.complete, s.courses)
+      b("finish", "🏆", "Desk cleared", "Finish every selected course", s.complete, s.courses)
     ];
   }
   function badgesCard() {
@@ -1314,7 +1362,7 @@
   }
 
   /* ---------- focus timer ---------- */
-  var TIMER_KEY = "cser:timer";
+  var TIMER_KEY = "csedesk:timer";
   var MODES = { focus25: { len: 1500, label: "Focus 25", focus: true }, focus50: { len: 3000, label: "Focus 50", focus: true }, break5: { len: 300, label: "Break 5", focus: false } };
   var T = Object.assign({ mode: "focus25", running: false, remaining: 1500, endAt: 0, code: null, version: null }, readJSON(TIMER_KEY, {}));
   if (!MODES[T.mode]) T.mode = "focus25";
@@ -1357,6 +1405,7 @@
     var st = v === settings.version ? S : loadState(v), k = todayKey();
     st.focusDays[k] = (st.focusDays[k] || 0) + mins;
     st.focusCourses[code] = (st.focusCourses[code] || 0) + mins;
+    var day = st.focusLog[k] = st.focusLog[k] || {}; day[code] = (day[code] || 0) + mins;
     if (v === settings.version) { saveState(); checkBadges(); if (route.view === "dashboard") render(); }
     else writeKey(STATE_PREFIX + v, JSON.stringify(st));
   }
@@ -1398,7 +1447,7 @@
       courseField = '<label class="small muted" for="timerCourse">Course</label><select class="select" id="timerCourse">' +
         selectedCourses().map(function (c) { return '<option value="' + esc(c.code) + '"' + (c.code === cur ? " selected" : "") + ">" + esc(c.title) + "</option>"; }).join("") + "</select>";
     } else courseField = '<div class="small muted">Stand up, stretch, drink some water.</div>';
-    var todayMin = S ? S.focusDays[todayKey()] || 0 : 0;
+    var todayMin = S && D ? selFocusDays()[todayKey()] || 0 : 0;
     panel.innerHTML = '<div class="timer-head"><b>Focus timer</b><button type="button" class="icon-btn" data-action="timer-close" aria-label="Close timer">×</button></div>' +
       '<div class="seg timer-modes" role="group" aria-label="Timer length">' + Object.keys(MODES).map(function (k) {
         return '<button type="button" data-action="timer-mode" data-val="' + k + '" class="' + (T.mode === k ? "on" : "") + '"' + (T.running ? " disabled" : "") + ">" + MODES[k].label + "</button>";
@@ -1562,11 +1611,11 @@
     var frac = s.hours ? s.hoursDone / s.hours : 0;
     var t = treeStageOf(frac), name = TREE_STAGES[t.stage - 1];
     var hoursToNext = t.stage < 25 ? Math.max(0, (t.stage / 24) * s.hours - s.hoursDone) : 0;
-    return '<div class="card tree-card"><div class="tree-frame" data-tip="' + esc("Your tree grows with the hours of tasks you finish in your selected courses. All of them done = Banyan Tree.") + '">' + treeSVG(t.stage) + "</div>" +
-      '<div class="tree-info"><div class="tree-name">' + esc(name) + '</div><div class="muted small">Stage ' + t.stage + " of 25 · " + (frac > 0 && frac < 0.01 ? "<1" : Math.floor(frac * 100)) + "% of hours done</div>" +
+    return '<div class="card tree-card"><div class="tree-frame" data-tip="' + esc("Your tree grows with the " + (TM() ? "steps" : "hours of tasks") + " you finish in your selected courses. All of them done = Banyan Tree.") + '">' + treeSVG(t.stage) + "</div>" +
+      '<div class="tree-info"><div class="tree-name">' + esc(name) + '</div><div class="muted small">Stage ' + t.stage + " of 25 · " + (frac > 0 && frac < 0.01 ? "<1" : Math.floor(frac * 100)) + "% of " + (TM() ? "steps" : "hours") + " done</div>" +
       (t.stage < 25
-        ? '<div class="bar tree-bar" data-tip="' + esc("Next: " + TREE_STAGES[t.stage] + ", about " + fmtHours(hoursToNext) + " of tasks away") + '"><span style="width:' + (t.next * 100).toFixed(1) + '%"></span></div>' +
-          '<div class="muted small">Next: ' + esc(TREE_STAGES[t.stage]) + " in ~" + fmtHours(hoursToNext) + "</div>"
+        ? '<div class="bar tree-bar" data-tip="' + esc("Next: " + TREE_STAGES[t.stage] + ", about " + fmtHours(Math.ceil(hoursToNext)) + (TM() ? "" : " of tasks") + " away") + '"><span style="width:' + (t.next * 100).toFixed(1) + '%"></span></div>' +
+          '<div class="muted small">Next: ' + esc(TREE_STAGES[t.stage]) + " in " + approx(TM() ? Math.ceil(hoursToNext) : hoursToNext) + "</div>"
         : '<div class="small" style="color:var(--done)">Fully grown. Every selected course is done!</div>') +
       "</div></div>";
   }

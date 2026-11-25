@@ -4,13 +4,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CSE Roadmap</title>
+<title>CSE Study Desk</title>
 <meta name="description" content="Self-study roadmaps built from the BUET CSE and Oxford CS degrees, with progress tracking.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232f6fdf'/%3E%3Cpath d='M9 22l5-6 4 4 5-8' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <script>
   // Apply the saved theme before first paint to avoid a flash.
   try {
-    var s = JSON.parse(localStorage.getItem("cser:settings") || "{}");
+    var s = JSON.parse(localStorage.getItem("csedesk:settings") || "{}");
     var t = s.theme || "light"; if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
   } catch (e) {}
 </script>
@@ -21,13 +21,13 @@
   <div class="topbar-inner">
     <a class="brand" href="#/dashboard" data-tip="Go to the dashboard">
       <span class="brand-mark" aria-hidden="true"></span>
-      <span class="brand-text" id="brandText">Unified CSE Roadmap</span>
+      <span class="brand-text" id="brandText">CSE Study Desk</span>
     </a>
     <button class="icon-btn" id="themeBtn" type="button" aria-label="Switch theme" data-tip="Switch light / dark theme"></button>
   </div>
   <nav class="nav" id="nav" aria-label="Main">
     <a href="#/dashboard" data-view="dashboard">Dashboard</a>
-    <a href="#/roadmap" data-view="roadmap">Roadmap</a>
+    <a href="#/desk" data-view="desk">Desk</a>
     <a href="#/courses" data-view="courses">Courses</a>
     <a href="#/tags" data-view="tags">Tags</a>
     <a href="#/settings" data-view="settings">Settings</a>
@@ -35,7 +35,7 @@
 </header>
 
 <main id="main" class="main" tabindex="-1">
-  <p class="loading">Loading roadmap…</p>
+  <p class="loading">Loading courses…</p>
 </main>
 
 <footer class="footer">
